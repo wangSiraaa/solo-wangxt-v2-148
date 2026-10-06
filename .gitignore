@@ -1,6 +1,22 @@
+# Python
+__pycache__/
+*.pyc
+.venv/
+.pytest_cache/
 
+# Node
+node_modules/
+dist/
+.angular/
+out-tsc/
 
-# SOLO initial credential and cache exclusions
+# Local PostgreSQL data & logs
+.pgdata/
+
+# misc
+*.log
+
+# Review publication credential exclusions
 .env
 .env.*
 !.env.example
@@ -17,9 +33,3 @@ id_ed25519
 *.key
 *.p12
 *.pfx
-node_modules/
-.venv/
-venv/
-__pycache__/
-.pytest_cache/
-.DS_Store
