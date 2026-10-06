@@ -1,0 +1,32 @@
+services:
+  db:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: tolchain
+      POSTGRES_PASSWORD: tolchain
+      POSTGRES_DB: tolchain
+    ports:
+      - "5432:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U tolchain"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  api:
+    build: ./backend
+    environment:
+      TC_DATABASE_URL: postgresql+psycopg2://tolchain:tolchain@db:5432/tolchain
+      TC_DEFAULT_N_SAMPLES: "100000"
+      TC_FIXED_SEED: "20260601"
+      TC_CORS_ORIGINS: '["http://localhost:4200"]'
+    ports:
+      - "8000:8000"
+    depends_on:
+      db:
+        condition: service_healthy
+
+volumes:
+  pgdata:

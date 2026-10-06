@@ -1,0 +1,249 @@
+<div class="page">
+  <header>
+    <h1>尺寸公差链分析</h1>
+    <p class="subtitle">比较装配间隙的最坏极值 · 均方根（RSS）· 蒙特卡洛分布</p>
+    <div class="header-actions">
+      <button class="secondary" (click)="seedDemo()">载入三个演示案例</button>
+      <button class="secondary" (click)="showEditor.set(!showEditor())">
+        {{ showEditor() ? '收起编辑器' : '＋ 新建尺寸链' }}
+      </button>
+    </div>
+  </header>
+
+  @if (error()) {
+    <div class="banner error">{{ error() }}</div>
+  }
+
+  @if (showEditor()) {
+    <app-chain-editor (saved)="showEditor.set(false); refresh()"></app-chain-editor>
+  }
+
+  <div class="layout">
+    <aside class="chain-list">
+      <h2>尺寸链</h2>
+      @if (!chains().length) {
+        <p class="muted">暂无数据。点击“载入三个演示案例”快速开始。</p>
+      }
+      @for (c of chains(); track c.id) {
+        <div class="chain-item" [class.active]="c.id === selectedId()" (click)="select(c.id)">
+          <div class="ci-name">{{ c.name }}</div>
+          <div class="ci-close">封闭环：{{ c.closing_name }}</div>
+          <div class="ci-meta">{{ c.dimensions.length }} 个组成环</div>
+          <button class="ci-del" title="删除" (click)="deleteChain(c.id, $event)">删除</button>
+        </div>
+      }
+    </aside>
+
+    <main class="detail">
+      @if (selected(); as c) {
+        <section class="card">
+          <h2>{{ c.name }}</h2>
+          @if (c.description) { <p class="desc">{{ c.description }}</p> }
+          <div class="closing-meta">
+            <span class="tag">封闭环：{{ c.closing_name }}</span>
+            <span class="tag dir">正方向：{{ c.closing_positive_direction }}</span>
+            <span class="tag">基准单位：{{ c.base_unit }}</span>
+            @if (c.expected_closing_nominal !== null && c.expected_closing_nominal !== undefined) {
+              <span class="tag">目标名义值：{{ fmt(c.expected_closing_nominal) }} mm</span>
+            }
+          </div>
+
+          <app-chain-diagram [chain]="c" [wc]="analysis()?.worst_case ?? null"></app-chain-diagram>
+
+          <h3>组成环与来源 / 方向 / 分布假设</h3>
+          <table class="dims">
+            <thead>
+              <tr>
+                <th>#</th><th>名称</th><th>名义值</th><th>下偏差</th><th>上偏差</th>
+                <th>单位</th><th>方向</th><th>尺寸来源</th><th>分布假设</th>
+              </tr>
+            </thead>
+            <tbody>
+              @for (d of c.dimensions; track $index) {
+                <tr [class.dec-row]="d.direction === -1">
+                  <td>{{ $index + 1 }}</td>
+                  <td>{{ d.name }}<br><small>{{ d.source_detail ?? '' }}</small></td>
+                  <td class="num">{{ fmt(d.nominal, 4) }}</td>
+                  <td class="num">{{ fmt(d.lower_deviation) }}</td>
+                  <td class="num">{{ fmt(d.upper_deviation) }}</td>
+                  <td>{{ d.dimension_unit }}</td>
+                  <td [class.pos]="d.direction === 1" [class.neg]="d.direction === -1">
+                    {{ d.direction === 1 ? '+ 增环' : '− 减环' }}
+                  </td>
+                  <td>{{ sourceLabel(d.source) }}</td>
+                  <td [class.unknown]="d.distribution_kind === 'unknown'">
+                    {{ distLabel(d.distribution_kind) }}
+                    @if (d.distribution_params['basis']) {
+                      <br><small>依据：{{ d.distribution_params['basis'] }}</small>
+                    }
+                  </td>
+                </tr>
+              }
+            </tbody>
+          </table>
+        </section>
+
+        <section class="card controls">
+          <label>蒙特卡洛样本数
+            <input type="number" min="100" max="10000000" step="10000" [(ngModel)]="nSamples">
+          </label>
+          <label>固定种子（留空用服务端种子）
+            <input type="number" [(ngModel)]="seed" placeholder="如 20260601">
+          </label>
+          <button class="primary" (click)="runAnalysis()" [disabled]="loading()">
+            {{ loading() ? '计算中…' : '重新计算' }}
+          </button>
+        </section>
+
+        @if (analysis(); as a) {
+          <section class="card">
+            <h3>三种方法对比（数值可能很接近，但前提不同）</h3>
+            <app-comparison-chart [data]="a"></app-comparison-chart>
+
+            <div class="method-grid">
+              <div class="method wc">
+                <h4>最坏极值（保证包络）</h4>
+                <p class="range">[{{ fmt(a.worst_case.minimum_mm) }}, {{ fmt(a.worst_case.maximum_mm) }}] mm</p>
+                <dl>
+                  <dt>封闭环名义值</dt><dd>{{ fmt(a.worst_case.nominal_mm) }} mm</dd>
+                  <dt>下/上偏差</dt>
+                  <dd>{{ fmt(a.worst_case.lower_deviation_mm) }} / {{ fmt(a.worst_case.upper_deviation_mm) }}</dd>
+                  <dt>公差带宽度 = Σ|Tᵢ|</dt>
+                  <dd>{{ fmt(a.worst_case.tolerance_span_mm) }} mm <em>（不是间隙！）</em></dd>
+                </dl>
+                <p class="note">{{ a.worst_case.absolute_sum_note }}</p>
+                <p class="premise">{{ a.worst_case.premises }}</p>
+              </div>
+
+              <div class="method rss">
+                <h4>均方根 RSS（±{{ a.rss?.k_sigma ?? 3 }}σ 统计区间）</h4>
+                @if (a.rss; as r) {
+                  <p class="range">[{{ fmt(r.lower_mm) }}, {{ fmt(r.upper_mm) }}] mm</p>
+                  <dl>
+                    <dt>均值</dt><dd>{{ fmt(r.mean_mm) }} mm</dd>
+                    <dt>相对名义均值平移</dt><dd>{{ fmt(r.mean_shift_from_nominal_mm) }} mm</dd>
+                    <dt>标准差 σ₀</dt><dd>{{ fmt(r.std_mm) }} mm</dd>
+                  </dl>
+                  <p class="premise">{{ r.premises }}</p>
+                } @else {
+                  <p class="blocked-text">未计算 —— 分布前提不满足，见下方“前提与阻断”。</p>
+                }
+              </div>
+
+              <div class="method mc">
+                <h4>蒙特卡洛经验分布</h4>
+                @if (a.monte_carlo; as m) {
+                  <p class="range">样本极值 [{{ fmt(m.sample_min_mm) }}, {{ fmt(m.sample_max_mm) }}] mm</p>
+                  <dl>
+                    <dt>均值 / σ</dt><dd>{{ fmt(m.mean_mm) }} / {{ fmt(m.std_mm) }}</dd>
+                    <dt>P1 / P50 / P99</dt>
+                    <dd>{{ fmt(m.p1_mm) }} / {{ fmt(m.p50_mm) }} / {{ fmt(m.p99_mm) }}</dd>
+                    <dt>样本数 / 固定种子</dt><dd>{{ m.n_samples | number }} / {{ m.seed }}</dd>
+                  </dl>
+                  <p class="check" [class.ok]="m.analytical_extreme_check.within_physical_envelope">
+                    解析极值核对：{{ m.analytical_extreme_check.within_physical_envelope ? '全部样本在物理包络内 ✓' : '存在越界样本 ✗' }}
+                    （越界 {{ m.analytical_extreme_check.samples_below_wc_min + m.analytical_extreme_check.samples_above_wc_max }} 个）
+                  </p>
+                  <p class="note">{{ m.analytical_extreme_check.note }}</p>
+                  @if (m.acceptance_estimate; as ae) {
+                    <p class="accept">
+                      验收区间 [{{ fmt(ae.lower_mm) }}, {{ fmt(ae.upper_mm) }}] 内估计比例：
+                      <strong>{{ (ae.fraction_within * 100).toFixed(2) }}%</strong>
+                      （{{ ae.note }}）
+                    </p>
+                  }
+                  <p class="premise">{{ m.premises }}</p>
+                } @else {
+                  <p class="blocked-text">未计算 —— 分布前提不满足。</p>
+                }
+              </div>
+            </div>
+          </section>
+
+          <section class="card">
+            <h3>哪个尺寸主导结果？（可追溯）</h3>
+            <div class="dom-grid">
+              <div>
+                <h4>按极值带宽</h4>
+                <ul class="contrib">
+                  @for (x of a.worst_case.contributors; track x.key) {
+                    <li>
+                      <span class="bar-track"><span class="bar-fill wc-fill" [style.width.%]="x.share * 100"></span></span>
+                      <span class="cname">{{ x.name }}</span>
+                      <span class="cshare">{{ sharePct(x) }}</span>
+                    </li>
+                  }
+                </ul>
+              </div>
+              <div>
+                <h4>按 RSS 方差</h4>
+                @if (a.rss) {
+                  <ul class="contrib">
+                    @for (x of a.rss.contributors; track x.key) {
+                      <li>
+                        <span class="bar-track"><span class="bar-fill rss-fill" [style.width.%]="x.share * 100"></span></span>
+                        <span class="cname">{{ x.name }}</span>
+                        <span class="cshare">{{ sharePct(x) }}</span>
+                      </li>
+                    }
+                  </ul>
+                } @else { <p class="muted">统计方法未执行。</p> }
+              </div>
+              <div>
+                <h4>按蒙特卡洛等级相关（带方向符号）</h4>
+                @if (a.monte_carlo) {
+                  <ul class="contrib">
+                    @for (x of a.monte_carlo.contributors; track x.key) {
+                      <li>
+                        <span class="bar-track"><span class="bar-fill mc-fill" [style.width.%]="x.share * 100"></span></span>
+                        <span class="cname">{{ x.name }}</span>
+                        <span class="cshare" [class.neg]="(x.spearman_with_closing ?? 0) < 0">
+                          ρ={{ fmt(x.spearman_with_closing, 3) }}
+                        </span>
+                      </li>
+                    }
+                  </ul>
+                } @else { <p class="muted">统计方法未执行。</p> }
+              </div>
+            </div>
+          </section>
+
+          @if (a.statistical_blockers.length || a.assumption_notes.length || a.warnings.length ||
+                a.unit_conversions.length) {
+            <section class="card warns">
+              <h3>前提与阻断 / 核对信息</h3>
+              @for (b of a.statistical_blockers; track $index) {
+                <p class="b blocker">⛔ {{ b }}</p>
+              }
+              @for (n of a.assumption_notes; track $index) {
+                <p class="b note-item">ℹ️ {{ n }}</p>
+              }
+              @for (w of a.warnings; track $index) {
+                <p class="b warn-item">⚠️ {{ w }}</p>
+              }
+              @for (u of a.unit_conversions; track $index) {
+                <p class="b unit-item">↔️ 单位换算：{{ u.name }} {{ u.from_unit }} → mm，系数 {{ u.factor_to_base }}</p>
+              }
+            </section>
+          }
+
+          @if (a.cross_check; as x) {
+            <section class="card cross">
+              <h3>方法间交叉核对</h3>
+              <p>RSS 与 MC 均值绝对差：{{ fmt(x.mean_abs_diff_mm, 7) }} mm；
+                 σ 相对差：{{ (x.std_relative_diff * 100).toFixed(2) }}%</p>
+              <p class="note">{{ x.note }}</p>
+            </section>
+          }
+
+          <section class="card disclaimer">
+            <h3>使用边界</h3>
+            <p>{{ a.disclaimer }}</p>
+          </section>
+        }
+      } @else {
+        <p class="muted big">请选择或新建一个尺寸链。</p>
+      }
+    </main>
+  </div>
+</div>
